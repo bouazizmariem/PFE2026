@@ -1,0 +1,7 @@
+data_raw/
+data_clean/
+logs/
+__pycache__/
+*.pyc
+.env
+postgres_data/

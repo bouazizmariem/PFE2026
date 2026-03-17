@@ -1,0 +1,154 @@
+name: Ecommerce scraping pipeline
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # toutes les 6h automatiquement
+  workflow_dispatch:          # bouton Run manuel sur GitHub
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+
+      # ── 1. Récupérer le code ──────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Python ────────────────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      # ── 3. Chrome + ChromeDriver ─────────────────────────
+      - name: Install Chrome
+        run: |
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          google-chrome --version
+
+      # ── 4. Dépendances Python ────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 5. Créer les dossiers de données ─────────────────
+      - name: Create data folders
+        run: mkdir -p data_raw data_clean
+
+      # ════════════════════════════════════════════════════
+      # SCRAPING
+      # ════════════════════════════════════════════════════
+
+      - name: Scrape Mytek Informatique
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_infoscraper as s
+          s.run(output_file='data_raw/mytek_infoproducts.json')
+          "
+
+      - name: Scrape Mytek Electromenager
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_elecscraper as s
+          s.run(output_file='data_raw/mytek_Electroproducts.json')
+          "
+
+      - name: Scrape Spacenet Electromenager
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import spacenetelecProd_spider as s
+          s.run(output_file='data_raw/spacenet_products.json')
+          "
+
+      - name: Scrape Spacenet Informatique
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import spacenetInfoProd_spider as s
+          s.run(output_file='data_raw/spacenet_Infoproducts.json')
+          "
+
+      - name: Scrape Tunisianet Electromenager
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import tunisianet_Electrospider as s
+          s.run(output_file='data_raw/tunisianet_Electroproducts.json')
+          "
+
+      - name: Scrape Tunisianet Informatique
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import tunisianet_Infospider as s
+          s.run(output_file='data_raw/tunisianet_Infoproducts.json')
+          "
+
+      # ════════════════════════════════════════════════════
+      # CLEANING
+      # ════════════════════════════════════════════════════
+
+      - name: Clean Mytek
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_cleaning')
+          import cleanMytek as c
+          c.main(
+              input_file='data_raw/mytek_Electroproducts.json',
+              output_file='data_clean/clean_mytekElectproducts.json'
+          )
+          c.main(
+              input_file='data_raw/mytek_infoproducts.json',
+              output_file='data_clean/clean_mytek_Infoproducts.json'
+          )
+          "
+
+      - name: Clean Spacenet and Tunisianet
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_cleaning')
+          import cleanSpacenetTunisianet as c
+          c.main(
+              input_file='data_raw/spacenet_products.json',
+              output_file='data_clean/clean_spacenetElectroproducts.json',
+              site_name='spacenet'
+          )
+          c.main(
+              input_file='data_raw/spacenet_Infoproducts.json',
+              output_file='data_clean/clean_spacenetInfoproducts.json',
+              site_name='spacenet'
+          )
+          c.main(
+              input_file='data_raw/tunisianet_Electroproducts.json',
+              output_file='data_clean/clean_TunisianetElectroproducts.json',
+              site_name='tunisianet'
+          )
+          c.main(
+              input_file='data_raw/tunisianet_Infoproducts.json',
+              output_file='data_clean/clean_TunisianetInfoproducts.json',
+              site_name='tunisianet'
+          )
+          "
+
+      # ════════════════════════════════════════════════════
+      # INGESTION MONGODB ATLAS
+      # ════════════════════════════════════════════════════
+
+      - name: Ingest to MongoDB Atlas
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: python database.py
