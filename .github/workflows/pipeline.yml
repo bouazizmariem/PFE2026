@@ -26,11 +26,11 @@ jobs:
       # ── 3. Chrome + ChromeDriver ─────────────────────────
       - name: Install Chrome
         run: |
-        # Installe Chrome et ChromeDriver de la même version
-        wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-        sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
-        # Force ChromeDriver à la bonne version via selenium-manager
-        pip install --upgrade selenium
+          # Installe Chrome et ChromeDriver de la même version
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          # Force ChromeDriver à la bonne version via selenium-manager
+          pip install --upgrade selenium
 
       # ── 4. Dépendances Python ────────────────────────────
       - name: Install dependencies
