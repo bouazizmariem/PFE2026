@@ -27,10 +27,11 @@ jobs:
       - name: Install Chrome
         uses: browser-actions/setup-chrome@v1
         with:
-        chrome-version: stable
+          chrome-version: stable
 
       - name: Upgrade Selenium
         run: pip install --upgrade selenium
+
       # ── 4. Dépendances Python ────────────────────────────
       - name: Install dependencies
         run: pip install -r requirements.txt
