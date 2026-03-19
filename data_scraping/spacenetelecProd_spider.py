@@ -121,18 +121,25 @@ class SpacenetSpider(scrapy.Spider):
 
 
 
-def run(output_file="data_raw/spacenet_electroproduct.json"):
+def run(output_file="data_raw/spacenet_products.json"):
     import subprocess
     import sys
     import os
 
     spider_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # ✅ Résoudre le chemin depuis le dossier où on lance le script
+    # pas depuis data_scraping/
+    output_abs = os.path.abspath(output_file)
+    
+    # Créer le dossier si nécessaire
+    os.makedirs(os.path.dirname(output_abs), exist_ok=True)
 
     result = subprocess.run(
         [
             sys.executable, "-m", "scrapy", "runspider",
             os.path.abspath(__file__),
-            "-O", output_file,   # ✅ majuscule = overwrite, une seule option
+            "-O", output_abs,
             "-s", "LOG_LEVEL=WARNING",
         ],
         cwd=spider_dir,
@@ -144,4 +151,4 @@ def run(output_file="data_raw/spacenet_electroproduct.json"):
         print("STDERR:", result.stderr)
         raise Exception(f"Scrapy failed with code {result.returncode}")
 
-    print(f"Scraping terminé → {output_file}")
+    print(f"Scraping terminé → {output_abs}")

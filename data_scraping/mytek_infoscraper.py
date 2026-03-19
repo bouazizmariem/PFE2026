@@ -12,6 +12,8 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # =========================================================
 # CONFIGURATION
@@ -57,22 +59,27 @@ def url_to_name(url: str) -> str:
 # =========================================================
 
 def get_subcategories(driver):
-    """Réutilise le driver existant — pas de nouveau driver ici."""
-
     print("Récupération sous-catégories...")
 
     driver.get(BASE_CATEGORY)
-    time.sleep(0.8)
+
+    # Attendre que les éléments soient présents (max 15 secondes)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "ul.list-unstyled li a"))
+        )
+    except:
+        print("Timeout — page pas chargée ou sélecteur introuvable")
 
     elements = driver.find_elements(By.CSS_SELECTOR, "ul.list-unstyled li a")
     subcategories = list(set([
         el.get_attribute("href")
         for el in elements
         if el.get_attribute("href")
+        and "mytek.tn" in el.get_attribute("href")   # ← filtre les liens externes
     ]))
 
     print(f"{len(subcategories)} sous-catégories trouvées")
-
     return subcategories
 
 

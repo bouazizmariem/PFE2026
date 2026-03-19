@@ -20,31 +20,29 @@ def subcategory_from_product_url(url: str) -> str:
     parts = url.rstrip("/").split("/")
     if len(parts) >= 2:
         slug = parts[-2]
-        if slug and "spacenet" not in slug and "http" not in slug:
+        if slug and "tunisianet" not in slug and "http" not in slug:
             return slug.replace("-", " ").title()
     return None
 
 
-class SpacenetSpider(scrapy.Spider):
-    name = "spacenet"
+class TunisianetInfoSpider(scrapy.Spider):
+    name = "tunisianet_info"
 
     MAIN_CATEGORY = "Informatique"
     start_urls = ["https://www.tunisianet.com.tn/300-informatique"]
 
-    # ← custom_settings N'A PLUS de FEEDS (géré par run())
     custom_settings = {
-        "CONCURRENT_REQUESTS": 64,
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 64,
-        "DOWNLOAD_DELAY": 0.1,
+        "CONCURRENT_REQUESTS": 32,
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 32,
+        "DOWNLOAD_DELAY": 0.2,
         "AUTOTHROTTLE_ENABLED": True,
-        "AUTOTHROTTLE_START_DELAY": 0.1,
+        "AUTOTHROTTLE_START_DELAY": 0.2,
         "AUTOTHROTTLE_MAX_DELAY": 3,
-        "AUTOTHROTTLE_TARGET_CONCURRENCY": 32,
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": 16,
         "RETRY_TIMES": 3,
         "RETRY_HTTP_CODES": [500, 502, 503, 504, 408, 429],
         "DOWNLOAD_TIMEOUT": 60,
         "LOG_LEVEL": "WARNING",
-        
     }
 
     def __init__(self, *args, **kwargs):
@@ -54,26 +52,28 @@ class SpacenetSpider(scrapy.Spider):
 
     def start_requests(self):
         self._start_time = time.perf_counter()
-        self.logger.warning(f"🕐 Scraping démarré à {datetime.now().strftime('%H:%M:%S')}")
+        self.logger.warning(f"Scraping démarré à {datetime.now().strftime('%H:%M:%S')}")
         yield from super().start_requests()
 
     def closed(self, reason):
         elapsed = time.perf_counter() - self._start_time
         minutes, seconds = divmod(int(elapsed), 60)
         self.logger.warning("=" * 50)
-        self.logger.warning(f"✅ Scraping terminé — raison : {reason}")
-        self.logger.warning(f"📦 Produits scrappés : {self._product_count}")
-        self.logger.warning(f"⏱  Temps total       : {minutes}m {seconds}s ({elapsed:.2f}s)")
+        self.logger.warning(f"Scraping terminé — raison : {reason}")
+        self.logger.warning(f"Produits scrappés : {self._product_count}")
+        self.logger.warning(f"Temps total : {minutes}m {seconds}s ({elapsed:.2f}s)")
         if self._product_count:
-            self.logger.warning(f"⚡ Vitesse moyenne   : {self._product_count / elapsed:.1f} produits/sec")
+            self.logger.warning(f"Vitesse moyenne : {self._product_count / elapsed:.1f} produits/sec")
         self.logger.warning("=" * 50)
 
     def parse(self, response):
-        for item in response.css("[data-id-product]"):
-            url = item.css(".product_name a::attr(href)").get()
+        # ✅ Sélecteur corrigé
+        for item in response.css("article[data-id-product]"):
+            url = item.css("a::attr(href)").get()
             if url:
                 yield scrapy.Request(url, callback=self.parse_product)
 
+        # Pagination
         next_pages = response.css("ul.page-list a.js-search-link::attr(href)").getall()
         for href in next_pages:
             if "page=" in href:
@@ -119,9 +119,7 @@ class SpacenetSpider(scrapy.Spider):
         }
 
 
-
-
-def run(output_file="data_raw/tunisianet_infoproducts.json"):
+def run(output_file="data_raw/tunisianet_Infoproducts.json"):
     import subprocess
     import sys
     import os
@@ -132,7 +130,7 @@ def run(output_file="data_raw/tunisianet_infoproducts.json"):
         [
             sys.executable, "-m", "scrapy", "runspider",
             os.path.abspath(__file__),
-            "-O", output_file,   # ✅ majuscule = overwrite, une seule option
+            "-O", os.path.abspath(output_file),  
             "-s", "LOG_LEVEL=WARNING",
         ],
         cwd=spider_dir,
