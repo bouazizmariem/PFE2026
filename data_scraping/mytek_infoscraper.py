@@ -1,278 +1,240 @@
 # =========================================================
-# MYTEK ULTRA OPTIMIZED SCRAPER — INFORMATIQUE
-# FIX CLOUDFLARE : cloudscraper remplace Selenium pour
-# les requêtes HTTP bloquées par Cloudflare sur GitHub CI
+# MYTEK SPIDER — INFORMATIQUE
+# Modèle identique à spacenetelecProd_spider.py :
+#   parse()         → sous-catégories + pagination catégorie
+#   parse_product() → détails produit via page produit
+#   run()           → lance scrapy runspider en subprocess
 # =========================================================
 
-import json
+import scrapy
+import re
 import time
-import cloudscraper
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from bs4 import BeautifulSoup
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
-
-# =========================================================
-# CONFIGURATION
-# =========================================================
-
+SCRAPED_DATE  = datetime.now().strftime("%Y-%m-%d")
 BASE_CATEGORY = "https://www.mytek.tn/informatique.html"
-API_URL       = "https://www.mytek.tn/opensearch_api/api/productData"
-
-BATCH_SIZE   = 40
-MAX_WORKERS  = 5
-
-MAIN_CATEGORY = BASE_CATEGORY.split("/")[-1].replace(".html", "").replace("-", " ").title()
-
-# cloudscraper gère automatiquement les headers + challenge Cloudflare
-scraper = cloudscraper.create_scraper(
-    browser={"browser": "chrome", "platform": "linux", "mobile": False}
-)
 
 
-# =========================================================
-# UTILITAIRE — Options Chrome (pour scraper les produits)
-# =========================================================
-
-def get_chrome_options():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    )
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    return options
-
-
-def url_to_name(url: str) -> str:
-    slug = url.split("/")[-1].replace(".html", "")
-    return slug.replace("-", " ").title()
-
-
-# =========================================================
-# 1. RÉCUPÉRER SOUS-CATÉGORIES — via cloudscraper + BeautifulSoup
-# =========================================================
-
-def get_subcategories():
-    print("Récupération sous-catégories via cloudscraper...")
-
+def clean_price(price_str):
+    """Nettoie une chaîne de prix et retourne un float ou None."""
+    if not price_str:
+        return None
+    cleaned = re.sub(r"[^\d,.]", "", price_str.strip()).replace(",", ".")
     try:
-        response = scraper.get(BASE_CATEGORY, timeout=30)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"Erreur requête cloudscraper : {e}")
-        return []
+        return float(cleaned)
+    except ValueError:
+        return None
 
-    print(f"  Status HTTP : {response.status_code}")
 
-    soup = BeautifulSoup(response.text, "html.parser")
+def subcategory_from_url(url: str) -> str:
+    """Extrait le nom de sous-catégorie depuis l'URL produit."""
+    parts = url.rstrip("/").split("/")
+    # URL pattern : .../informatique/sous-categorie/produit.html
+    if len(parts) >= 3:
+        slug = parts[-2]
+        if slug and "mytek" not in slug and "http" not in slug:
+            return slug.replace("-", " ").title()
+    return None
 
-    selectors = [
-        ("ul.list-unstyled li a",   lambda s: s.select("ul.list-unstyled li a")),
-        ("ol.items li a",           lambda s: s.select("ol.items li a")),
-        ("ul.items li a",           lambda s: s.select("ul.items li a")),
-        ("div.block-content a",     lambda s: s.select("div.block-content a")),
-        ("div.sidebar a",           lambda s: s.select("div.sidebar a")),
-        ("li.level1 a",             lambda s: s.select("li.level1 a")),
-        ("li.level2 a",             lambda s: s.select("li.level2 a")),
-        ("nav a",                   lambda s: s.select("nav a")),
-        # Fallback absolu
-        ("a[href*=informatique]",   lambda s: s.find_all("a", href=lambda h: h and "/informatique/" in h)),
-    ]
 
-    subcategories = []
+# =========================================================
+# SPIDER
+# =========================================================
 
-    for name, fn in selectors:
-        elements = fn(soup)
-        links = list(set([
-            el.get("href")
-            for el in elements
-            if el.get("href")
-            and "mytek.tn" in el.get("href")
-            and el.get("href") != BASE_CATEGORY
-            and el.get("href").endswith(".html")
-            and "informatique" in el.get("href")
+class MytekInfoSpider(scrapy.Spider):
+    name = "mytek_info"
+
+    MAIN_CATEGORY = "Informatique"
+    start_urls    = [BASE_CATEGORY]
+
+    custom_settings = {
+        "CONCURRENT_REQUESTS":             16,
+        "CONCURRENT_REQUESTS_PER_DOMAIN":  16,
+        "DOWNLOAD_DELAY":                  0.3,
+        "AUTOTHROTTLE_ENABLED":            True,
+        "AUTOTHROTTLE_START_DELAY":        0.3,
+        "AUTOTHROTTLE_MAX_DELAY":          5,
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": 8,
+        "RETRY_TIMES":                     3,
+        "RETRY_HTTP_CODES":                [500, 502, 503, 504, 408, 429],
+        "DOWNLOAD_TIMEOUT":                60,
+        "LOG_LEVEL":                       "WARNING",
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._start_time    = None
+        self._product_count = 0
+
+    def start_requests(self):
+        self._start_time = time.perf_counter()
+        self.logger.warning(f"Scraping démarré à {datetime.now().strftime('%H:%M:%S')}")
+        yield from super().start_requests()
+
+    def closed(self, reason):
+        elapsed = time.perf_counter() - self._start_time
+        minutes, seconds = divmod(int(elapsed), 60)
+        self.logger.warning("=" * 50)
+        self.logger.warning(f"Spider terminé — raison : {reason}")
+        self.logger.warning(f"Produits scrappés : {self._product_count}")
+        self.logger.warning(f"Temps total       : {minutes}m {seconds}s ({elapsed:.2f}s)")
+        if self._product_count:
+            self.logger.warning(f"Vitesse moyenne   : {self._product_count / elapsed:.1f} produits/sec")
+        self.logger.warning("=" * 50)
+
+    # ── 1. Page principale → sous-catégories ─────────────────────────
+
+    def parse(self, response):
+        """
+        Parse la page catégorie principale.
+        Extrait les sous-catégories et les suit.
+        Si aucune sous-cat trouvée, parse directement comme listing.
+        """
+        subcat_links = list(set([
+            href for href in response.css("ul.list-unstyled li a::attr(href)").getall()
+            if href
+            and "mytek.tn" in href
+            and href != BASE_CATEGORY
+            and href.endswith(".html")
+            and "informatique" in href
         ]))
 
-        if links:
-            print(f"  Sélecteur retenu : '{name}' → {len(links)} sous-catégories")
-            subcategories = links
-            break
+        if subcat_links:
+            self.logger.warning(f"{len(subcat_links)} sous-catégories trouvées")
+            for href in subcat_links:
+                yield scrapy.Request(href, callback=self.parse_listing)
         else:
-            print(f"  '{name}' → 0 liens, essai suivant...")
+            # Fallback : page principale traitée comme listing direct
+            self.logger.warning("Aucune sous-catégorie — parsing direct de la page principale")
+            yield from self.parse_listing(response)
 
-    if not subcategories:
-        print("  AUCUN sélecteur n'a fonctionné.")
-        print(f"  HTML[:800] :\n{response.text[:800]}")
+    # ── 2. Page listing produits → liens produits + pagination ───────
 
-    print(f"{len(subcategories)} sous-catégories trouvées")
-    return subcategories
+    def parse_listing(self, response):
+        """
+        Parse une page de listing de produits.
+        Suit chaque lien produit et pagine si nécessaire.
+        """
+        # Liens vers les pages produits individuelles
+        product_links = response.css(
+            "div.product-container a.product-name::attr(href), "
+            "div.product-container h2 a::attr(href), "
+            "li.item a.product-image::attr(href), "
+            "a.product_name::attr(href)"
+        ).getall()
 
+        for href in set(product_links):
+            if href and "mytek.tn" in href:
+                yield scrapy.Request(href, callback=self.parse_product)
 
-# =========================================================
-# 2. RÉCUPÉRER IDS PRODUITS — via Selenium
-# =========================================================
+        # Pagination
+        current_page = int(re.search(r"[?&]p=(\d+)", response.url).group(1)) \
+            if re.search(r"[?&]p=(\d+)", response.url) else 1
+        next_page    = current_page + 1
+        base_url     = response.url.split("?")[0]
 
-def scrape_ids_from_category(driver, category_url):
+        has_next = response.css(
+            f"a[href*='?p={next_page}'], a[href*='&p={next_page}']"
+        ).get()
 
-    id_to_subcat     = {}
-    page             = 1
-    subcategory_name = url_to_name(category_url)
-    seen_ids         = set()
-
-    print(f"\n[{subcategory_name}] {category_url}")
-
-    while True:
-
-        url = f"{category_url}?p={page}"
-        driver.get(url)
-
-        try:
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-container"))
+        if has_next and product_links:
+            yield scrapy.Request(
+                f"{base_url}?p={next_page}",
+                callback=self.parse_listing
             )
-        except:
-            break
 
-        products = driver.find_elements(By.CSS_SELECTOR, "div.product-container")
+    # ── 3. Page produit → données ────────────────────────────────────
 
-        if not products:
-            break
+    def parse_product(self, response):
+        """Parse la page d'un produit individuel."""
 
-        page_ids = []
+        # Prix
+        price_final    = clean_price(
+            response.css(".price-box .price::text, .special-price .price::text").get()
+        )
+        price_original = clean_price(
+            response.css(".old-price .price::text, .regular-price .price::text").get()
+        )
 
-        for product in products:
-            pid = product.get_attribute("data-product-id")
-            if pid and pid not in seen_ids:
-                page_ids.append(pid)
-                seen_ids.add(pid)
-                id_to_subcat[pid] = subcategory_name
+        # Spécifications techniques
+        specs = {}
+        keys   = response.css("table.data-table th::text, dl.product-specs dt::text").getall()
+        values = response.css("table.data-table td::text, dl.product-specs dd::text").getall()
+        for k, v in zip(keys, values):
+            k, v = k.strip(), v.strip()
+            if k and v:
+                specs[k] = v
 
-        if not page_ids:
-            break
+        # Disponibilité
+        availability = (
+            response.css(".availability span::text, .stock-availability::text").get("")
+        ).strip() or "Disponible"
 
-        print(f"  Page {page} -> {len(page_ids)} produits")
-        page += 1
+        # Image
+        image_url = response.css(
+            "img#image-main::attr(src), "
+            ".product-image img::attr(src), "
+            "img.gallery-image::attr(src)"
+        ).get()
 
-    return id_to_subcat
+        self._product_count += 1
 
-
-# =========================================================
-# 3. API BATCH — via cloudscraper
-# =========================================================
-
-def fetch_batch(batch_ids, id_to_subcat, scraped_at):
-
-    ids_string = ",".join(batch_ids)
-    url        = f"{API_URL}?ids={ids_string}"
-
-    try:
-        response = scraper.get(url, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-
-        if isinstance(data, dict):
-            products = list(data.values())
-            for p in products:
-                pid = str(p.get("id", ""))
-                p["category"]    = MAIN_CATEGORY
-                p["subcategory"] = id_to_subcat.get(pid, None)
-                p["scraped_at"]  = scraped_at
-            return products
-        else:
-            return []
-
-    except Exception as e:
-        print(f"Erreur API batch {batch_ids[:3]}... : {e}")
-        return []
-
-
-def fetch_all_products(id_to_subcat):
-
-    print("\nRécupération détails via API (multi-thread)...")
-
-    scraped_at   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    product_ids  = list(id_to_subcat.keys())
-    all_products = []
-    batches      = [product_ids[i:i+BATCH_SIZE] for i in range(0, len(product_ids), BATCH_SIZE)]
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(fetch_batch, batch, id_to_subcat, scraped_at) for batch in batches]
-        for i, future in enumerate(as_completed(futures), 1):
-            data = future.result()
-            all_products.extend(data)
-            print(f"Batch {i}/{len(batches)} OK")
-
-    print(f"\nTotal produits récupérés : {len(all_products)}")
-    return all_products
+        yield {
+            "url":            response.url,
+            "name":           response.css("h1.product-name::text, h1::text").get("").strip(),
+            "reference":      response.css(
+                ".product-reference::text, span[itemprop='sku']::text"
+            ).get("").strip(),
+            "brand":          response.css(
+                ".product-manufacturer a::text, span[itemprop='brand']::text"
+            ).get("").strip(),
+            "category":       self.MAIN_CATEGORY,
+            "subcategory":    subcategory_from_url(response.url),
+            "price_history": [{
+                "price_final":    price_final,
+                "price_original": price_original,
+                "availability":   availability,
+                "date":           SCRAPED_DATE,
+            }],
+            "image_url":      image_url,
+            "description":    response.css(
+                "#description, .product-description"
+            ).xpath("string()").get("").strip(),
+            "specifications": specs,
+            "scraped_at":     SCRAPED_DATE,
+        }
 
 
 # =========================================================
-# 4. SAUVEGARDE JSON
-# =========================================================
-
-def save_to_json(products, output_file):
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(products, f, ensure_ascii=False, indent=4)
-
-    print(f"\nDonnées sauvegardées dans {output_file}")
-
-
-# =========================================================
-# PIPELINE PRINCIPAL
+# RUN — identique au pattern spacenet
 # =========================================================
 
 def run(output_file="data_raw/mytek_infoproducts.json"):
+    import subprocess
+    import sys
+    import os
 
-    start = time.time()
+    spider_dir = os.path.dirname(os.path.abspath(__file__))
+    output_abs = os.path.abspath(output_file)
+    os.makedirs(os.path.dirname(output_abs), exist_ok=True)
 
-    # 1. Sous-catégories via cloudscraper (pas de Selenium ici)
-    subcategories = get_subcategories()
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "scrapy", "runspider",
+            os.path.abspath(__file__),
+            "-O", output_abs,
+            "-s", "LOG_LEVEL=WARNING",
+        ],
+        cwd=spider_dir,
+        capture_output=True,
+        text=True
+    )
 
-    if not subcategories:
-        print("Aucune sous-catégorie trouvée — scraping annulé.")
-        return
+    if result.returncode != 0:
+        print("STDERR:", result.stderr[-2000:])
+        raise Exception(f"Scrapy failed with code {result.returncode}")
 
-    # 2. IDs produits via Selenium (une seule instance)
-    driver = webdriver.Chrome(options=get_chrome_options())
-    all_id_to_subcat = {}
-
-    try:
-        for sub in subcategories:
-            id_map = scrape_ids_from_category(driver, sub)
-            all_id_to_subcat.update(id_map)
-    finally:
-        driver.quit()
-
-    print(f"\nTotal produits uniques : {len(all_id_to_subcat)}")
-
-    if not all_id_to_subcat:
-        print("Aucun produit trouvé — fichier JSON non créé.")
-        return
-
-    # 3. Détails via API (cloudscraper)
-    products = fetch_all_products(all_id_to_subcat)
-    save_to_json(products, output_file)
-
-    end = time.time()
-    print(f"\nTemps total : {round(end - start, 2)} secondes")
+    print(f"Scraping terminé → {output_abs}")
 
 
 if __name__ == "__main__":
