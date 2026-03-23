@@ -2,7 +2,7 @@ name: Ecommerce scraping pipeline
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # toutes les 6h automatiquement
+    - cron: "0 */12 * * *"   # toutes les 12h automatiquement
   workflow_dispatch:          # bouton Run manuel sur GitHub
 
 jobs:
@@ -20,10 +20,16 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: "pip"
 
-      # ── 3. Chrome + ChromeDriver ─────────────────────────
+      # ── 3. Upgrade pymongo, certifi, dnspython ───────────
+      #    FIX : doit être AVANT install dependencies et AVANT
+      #          tout appel MongoDB, pas à la fin du workflow
+      - name: Upgrade pymongo and certifi
+        run: pip install --upgrade pymongo certifi dnspython
+
+      # ── 4. Chrome + ChromeDriver ─────────────────────────
       - name: Install Chrome
         uses: browser-actions/setup-chrome@v1
         with:
@@ -32,11 +38,16 @@ jobs:
       - name: Upgrade Selenium
         run: pip install --upgrade selenium
 
-      # ── 4. Dépendances Python ────────────────────────────
+      # ── 5. Dépendances Python ────────────────────────────
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 5. Créer les dossiers de données ─────────────────
+      # ── 6. Vérification SSL (optionnel, utile pour debug) ─
+      #    FIX : déplacé ici, après l'installation, avant usage
+      - name: Check OpenSSL version
+        run: python -c "import ssl; print(ssl.OPENSSL_VERSION)"
+
+      # ── 7. Créer les dossiers de données ─────────────────
       - name: Create data folders
         run: mkdir -p data_raw data_clean
 
@@ -150,7 +161,9 @@ jobs:
       # INGESTION MONGODB ATLAS
       # ════════════════════════════════════════════════════
 
+      # FIX : DATA_FOLDER pointe vers data_clean où sont les fichiers nettoyés
       - name: Ingest to MongoDB Atlas
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
+          DATA_FOLDER: data_clean          # ← transmis au script database.py
         run: python database.py

@@ -10,10 +10,11 @@ import certifi
 
 MONGO_URI = os.environ.get(
     "MONGO_URI",
-    "mongodb+srv://mariembouaziz:12345@cluster0.dlbfsmd.mongodb.net/..."
+    "mongodb+srv://mariembouaziz:12345@cluster0.dlbfsmd.mongodb.net/ecommerce_db?retryWrites=true&w=majority"
 )
-DB_NAME = "ecommerce_db"
+DB_NAME        = "ecommerce_db"
 COLLECTION_NAME = "products"
+DATA_FOLDER    = os.path.join(os.path.dirname(__file__), "data")   # ← FIX : dossier "data/" à côté du script
 
 
 # ============================
@@ -24,13 +25,15 @@ def get_collection():
     """Crée la connexion uniquement quand on en a besoin."""
     client = MongoClient(
         MONGO_URI,
-        tlsCAFile=certifi.where(),
-        serverSelectionTimeoutMS=10000   # timeout 10s
+        tlsCAFile=certifi.where(),              # ← FIX SSL : certificats CA à jour
+        serverSelectionTimeoutMS=20000,         # timeout 20s
+        connectTimeoutMS=20000,
+        socketTimeoutMS=20000,
     )
-    db = client[DB_NAME]
+    db         = client[DB_NAME]
     collection = db[COLLECTION_NAME]
     collection.create_index("url", unique=True)
-    return collection
+    return client, collection                   # ← FIX : on retourne aussi le client pour pouvoir le fermer
 
 
 # ============================
@@ -57,8 +60,8 @@ def update_product(collection, product):
         last_price = existing["price_history"][-1]
 
         changed = (
-            last_price["price_final"] != new_price["price_final"]
-            or last_price["availability"] != new_price["availability"]
+            last_price.get("price_final")   != new_price.get("price_final")
+            or last_price.get("availability") != new_price.get("availability")
         )
 
         new_price["changed"] = changed
@@ -87,51 +90,62 @@ def update_product(collection, product):
 def process_files():
 
     print("Connexion à MongoDB Atlas...")
-    collection = get_collection()   # ← connexion ici, pas au démarrage
+
+    try:
+        client, collection = get_collection()   # ← FIX : récupère le client aussi
+    except Exception as e:
+        print(f"Erreur de connexion MongoDB : {e}")
+        raise
+
     print("Connexion MongoDB réussie ✅")
 
-    total_inserted = 0
-    total_updated = 0
+    total_inserted  = 0
+    total_updated   = 0
     total_unchanged = 0
-    total_skipped = 0
+    total_skipped   = 0
 
-    if not os.path.exists(DATA_FOLDER):
-        raise FileNotFoundError(f"Dossier introuvable : {DATA_FOLDER}")
+    try:
 
-    files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".json")]
+        if not os.path.exists(DATA_FOLDER):
+            raise FileNotFoundError(f"Dossier introuvable : {DATA_FOLDER}")
 
-    if not files:
-        print("Aucun fichier JSON trouvé dans", DATA_FOLDER)
-        return
+        files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".json")]
 
-    for filename in files:
+        if not files:
+            print("Aucun fichier JSON trouvé dans", DATA_FOLDER)
+            return
 
-        file_path = os.path.join(DATA_FOLDER, filename)
-        print(f"\n Traitement : {filename}")
+        for filename in files:
 
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                products = json.load(f)
-        except Exception as e:
-            print(f"  Erreur lecture {filename} : {e}")
-            continue
+            file_path = os.path.join(DATA_FOLDER, filename)
+            print(f"\nTraitement : {filename}")
 
-        for product in products:
             try:
-                status = update_product(collection, product)
+                with open(file_path, "r", encoding="utf-8") as f:
+                    products = json.load(f)
             except Exception as e:
-                print(f"  Erreur produit {product.get('url', '?')} : {e}")
-                total_skipped += 1
+                print(f"  Erreur lecture {filename} : {e}")
                 continue
 
-            if status == "inserted":
-                total_inserted += 1
-            elif status == "updated":
-                total_updated += 1
-            elif status == "unchanged":
-                total_unchanged += 1
-            else:
-                total_skipped += 1
+            for product in products:
+                try:
+                    status = update_product(collection, product)
+                except Exception as e:
+                    print(f"  Erreur produit {product.get('url', '?')} : {e}")
+                    total_skipped += 1
+                    continue
+
+                if status == "inserted":
+                    total_inserted  += 1
+                elif status == "updated":
+                    total_updated   += 1
+                elif status == "unchanged":
+                    total_unchanged += 1
+                else:
+                    total_skipped   += 1
+
+    finally:
+        client.close()                          # ← FIX : fermeture propre de la connexion
 
     print("\n==============================")
     print("Pipeline terminé")

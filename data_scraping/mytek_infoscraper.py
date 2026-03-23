@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -20,32 +19,34 @@ from selenium.webdriver.support import expected_conditions as EC
 # =========================================================
 
 BASE_CATEGORY = "https://www.mytek.tn/informatique.html"
-API_URL = "https://www.mytek.tn/opensearch_api/api/productData"
+API_URL       = "https://www.mytek.tn/opensearch_api/api/productData"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "X-Requested-With": "XMLHttpRequest",
-    "Accept": "application/json"
+    "User-Agent":        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "X-Requested-With":  "XMLHttpRequest",
+    "Accept":            "application/json"
 }
 
-BATCH_SIZE = 40
-MAX_WORKERS = 5
+BATCH_SIZE   = 40
+MAX_WORKERS  = 5
 
 MAIN_CATEGORY = BASE_CATEGORY.split("/")[-1].replace(".html", "").replace("-", " ").title()
 
 
 # =========================================================
-# UTILITAIRE — Options Chrome compatibles Docker
+# CHROME OPTIONS
 # =========================================================
 
 def get_chrome_options():
-    """Options Chrome obligatoires dans un conteneur Docker."""
     options = Options()
     options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")              # obligatoire Docker
-    options.add_argument("--disable-dev-shm-usage")   # obligatoire Docker
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")  # FIX 1 : évite la détection bot
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
     return options
 
 
@@ -63,20 +64,23 @@ def get_subcategories(driver):
 
     driver.get(BASE_CATEGORY)
 
-    # Attendre que les éléments soient présents (max 15 secondes)
+    # FIX 2 : timeout augmenté à 30s pour les runners GitHub Actions (plus lents)
     try:
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "ul.list-unstyled li a"))
         )
-    except:
-        print("Timeout — page pas chargée ou sélecteur introuvable")
+    except Exception as e:
+        print(f"Timeout — page pas chargée ou sélecteur introuvable : {e}")
+        # FIX 2 : on retourne une liste vide au lieu de crasher silencieusement
+        return []
 
     elements = driver.find_elements(By.CSS_SELECTOR, "ul.list-unstyled li a")
     subcategories = list(set([
         el.get_attribute("href")
         for el in elements
         if el.get_attribute("href")
-        and "mytek.tn" in el.get_attribute("href")   # ← filtre les liens externes
+        and "mytek.tn" in el.get_attribute("href")
+        and el.get_attribute("href") != BASE_CATEGORY   # FIX 3 : exclut la catégorie parente elle-même
     ]))
 
     print(f"{len(subcategories)} sous-catégories trouvées")
@@ -89,9 +93,10 @@ def get_subcategories(driver):
 
 def scrape_ids_from_category(driver, category_url):
 
-    id_to_subcat = {}
-    page = 1
+    id_to_subcat     = {}
+    page             = 1
     subcategory_name = url_to_name(category_url)
+    seen_ids         = set()   # FIX 4 : suivi correct des IDs déjà vus
 
     print(f"\n[{subcategory_name}] {category_url}")
 
@@ -99,7 +104,14 @@ def scrape_ids_from_category(driver, category_url):
 
         url = f"{category_url}?p={page}"
         driver.get(url)
-        time.sleep(1)
+
+        # FIX 2 : attente explicite au lieu d'un time.sleep(1) trop court
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-container"))
+            )
+        except:
+            break   # plus de produits ou page vide → fin de pagination
 
         products = driver.find_elements(By.CSS_SELECTOR, "div.product-container")
 
@@ -110,15 +122,16 @@ def scrape_ids_from_category(driver, category_url):
 
         for product in products:
             pid = product.get_attribute("data-product-id")
-            if pid:
+            if pid and pid not in seen_ids:   # FIX 4 : on n'ajoute que les nouveaux IDs
                 page_ids.append(pid)
+                seen_ids.add(pid)
                 id_to_subcat[pid] = subcategory_name
 
-        if set(page_ids).issubset(set(id_to_subcat.keys())):
+        # FIX 4 : si aucun nouvel ID sur cette page → on s'arrête (était buggé avant)
+        if not page_ids:
             break
 
         print(f"  Page {page} -> {len(page_ids)} produits")
-
         page += 1
 
     return id_to_subcat
@@ -131,10 +144,11 @@ def scrape_ids_from_category(driver, category_url):
 def fetch_batch(batch_ids, id_to_subcat, scraped_at):
 
     ids_string = ",".join(batch_ids)
-    url = f"{API_URL}?ids={ids_string}"
+    url        = f"{API_URL}?ids={ids_string}"
 
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
+        response.raise_for_status()
         data = response.json()
 
         if isinstance(data, dict):
@@ -149,7 +163,7 @@ def fetch_batch(batch_ids, id_to_subcat, scraped_at):
             return []
 
     except Exception as e:
-        print("Erreur API:", e)
+        print(f"Erreur API batch {batch_ids[:3]}... : {e}")
         return []
 
 
@@ -157,10 +171,10 @@ def fetch_all_products(id_to_subcat):
 
     print("\nRécupération détails via API (multi-thread)...")
 
-    scraped_at  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    product_ids = list(id_to_subcat.keys())
+    scraped_at   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    product_ids  = list(id_to_subcat.keys())
     all_products = []
-    batches = [product_ids[i:i+BATCH_SIZE] for i in range(0, len(product_ids), BATCH_SIZE)]
+    batches      = [product_ids[i:i+BATCH_SIZE] for i in range(0, len(product_ids), BATCH_SIZE)]
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(fetch_batch, batch, id_to_subcat, scraped_at) for batch in batches]
@@ -170,7 +184,6 @@ def fetch_all_products(id_to_subcat):
             print(f"Batch {i}/{len(batches)} OK")
 
     print(f"\nTotal produits récupérés : {len(all_products)}")
-
     return all_products
 
 
@@ -192,14 +205,16 @@ def save_to_json(products, output_file):
 
 def run(output_file="data_raw/mytek_infoproducts.json"):
 
-    start = time.time()
-
-    # Un seul driver créé ici, avec toutes les options Docker
+    start  = time.time()
     driver = webdriver.Chrome(options=get_chrome_options())
 
     try:
-        # get_subcategories reçoit le driver — pas de second webdriver.Chrome()
         subcategories = get_subcategories(driver)
+
+        # FIX 2 : arrêt propre si aucune sous-catégorie trouvée
+        if not subcategories:
+            print("Aucune sous-catégorie trouvée — scraping annulé.")
+            return
 
         all_id_to_subcat = {}
 
@@ -208,12 +223,15 @@ def run(output_file="data_raw/mytek_infoproducts.json"):
             all_id_to_subcat.update(id_map)
 
     finally:
-        driver.quit()   # toujours fermé même si erreur
+        driver.quit()
 
     print(f"\nTotal produits uniques : {len(all_id_to_subcat)}")
 
-    products = fetch_all_products(all_id_to_subcat)
+    if not all_id_to_subcat:
+        print("Aucun produit trouvé — fichier JSON non créé.")
+        return
 
+    products = fetch_all_products(all_id_to_subcat)
     save_to_json(products, output_file)
 
     end = time.time()
