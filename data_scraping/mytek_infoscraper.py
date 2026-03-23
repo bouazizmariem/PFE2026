@@ -1,18 +1,22 @@
 # =========================================================
-# MYTEK ULTRA OPTIMIZED SCRAPER
+# MYTEK ULTRA OPTIMIZED SCRAPER — INFORMATIQUE
+# FIX CLOUDFLARE : cloudscraper remplace Selenium pour
+# les requêtes HTTP bloquées par Cloudflare sur GitHub CI
 # =========================================================
 
-import requests
 import json
 import time
+import cloudscraper
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from bs4 import BeautifulSoup
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
 
 # =========================================================
 # CONFIGURATION
@@ -21,20 +25,19 @@ from selenium.webdriver.support import expected_conditions as EC
 BASE_CATEGORY = "https://www.mytek.tn/informatique.html"
 API_URL       = "https://www.mytek.tn/opensearch_api/api/productData"
 
-HEADERS = {
-    "User-Agent":        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "X-Requested-With":  "XMLHttpRequest",
-    "Accept":            "application/json"
-}
-
 BATCH_SIZE   = 40
 MAX_WORKERS  = 5
 
 MAIN_CATEGORY = BASE_CATEGORY.split("/")[-1].replace(".html", "").replace("-", " ").title()
 
+# cloudscraper gère automatiquement les headers + challenge Cloudflare
+scraper = cloudscraper.create_scraper(
+    browser={"browser": "chrome", "platform": "linux", "mobile": False}
+)
+
 
 # =========================================================
-# CHROME OPTIONS
+# UTILITAIRE — Options Chrome (pour scraper les produits)
 # =========================================================
 
 def get_chrome_options():
@@ -43,8 +46,15 @@ def get_chrome_options():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")  # FIX 1 : évite la détection bot
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    )
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     return options
@@ -56,39 +66,67 @@ def url_to_name(url: str) -> str:
 
 
 # =========================================================
-# 1. RÉCUPÉRER SOUS-CATÉGORIES (Selenium)
+# 1. RÉCUPÉRER SOUS-CATÉGORIES — via cloudscraper + BeautifulSoup
 # =========================================================
 
-def get_subcategories(driver):
-    print("Récupération sous-catégories...")
+def get_subcategories():
+    print("Récupération sous-catégories via cloudscraper...")
 
-    driver.get(BASE_CATEGORY)
-
-    # FIX 2 : timeout augmenté à 30s pour les runners GitHub Actions (plus lents)
     try:
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "ul.list-unstyled li a"))
-        )
+        response = scraper.get(BASE_CATEGORY, timeout=30)
+        response.raise_for_status()
     except Exception as e:
-        print(f"Timeout — page pas chargée ou sélecteur introuvable : {e}")
-        # FIX 2 : on retourne une liste vide au lieu de crasher silencieusement
+        print(f"Erreur requête cloudscraper : {e}")
         return []
 
-    elements = driver.find_elements(By.CSS_SELECTOR, "ul.list-unstyled li a")
-    subcategories = list(set([
-        el.get_attribute("href")
-        for el in elements
-        if el.get_attribute("href")
-        and "mytek.tn" in el.get_attribute("href")
-        and el.get_attribute("href") != BASE_CATEGORY   # FIX 3 : exclut la catégorie parente elle-même
-    ]))
+    print(f"  Status HTTP : {response.status_code}")
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    selectors = [
+        ("ul.list-unstyled li a",   lambda s: s.select("ul.list-unstyled li a")),
+        ("ol.items li a",           lambda s: s.select("ol.items li a")),
+        ("ul.items li a",           lambda s: s.select("ul.items li a")),
+        ("div.block-content a",     lambda s: s.select("div.block-content a")),
+        ("div.sidebar a",           lambda s: s.select("div.sidebar a")),
+        ("li.level1 a",             lambda s: s.select("li.level1 a")),
+        ("li.level2 a",             lambda s: s.select("li.level2 a")),
+        ("nav a",                   lambda s: s.select("nav a")),
+        # Fallback absolu
+        ("a[href*=informatique]",   lambda s: s.find_all("a", href=lambda h: h and "/informatique/" in h)),
+    ]
+
+    subcategories = []
+
+    for name, fn in selectors:
+        elements = fn(soup)
+        links = list(set([
+            el.get("href")
+            for el in elements
+            if el.get("href")
+            and "mytek.tn" in el.get("href")
+            and el.get("href") != BASE_CATEGORY
+            and el.get("href").endswith(".html")
+            and "informatique" in el.get("href")
+        ]))
+
+        if links:
+            print(f"  Sélecteur retenu : '{name}' → {len(links)} sous-catégories")
+            subcategories = links
+            break
+        else:
+            print(f"  '{name}' → 0 liens, essai suivant...")
+
+    if not subcategories:
+        print("  AUCUN sélecteur n'a fonctionné.")
+        print(f"  HTML[:800] :\n{response.text[:800]}")
 
     print(f"{len(subcategories)} sous-catégories trouvées")
     return subcategories
 
 
 # =========================================================
-# 2. RÉCUPÉRER TOUS LES IDS D'UNE CATÉGORIE
+# 2. RÉCUPÉRER IDS PRODUITS — via Selenium
 # =========================================================
 
 def scrape_ids_from_category(driver, category_url):
@@ -96,7 +134,7 @@ def scrape_ids_from_category(driver, category_url):
     id_to_subcat     = {}
     page             = 1
     subcategory_name = url_to_name(category_url)
-    seen_ids         = set()   # FIX 4 : suivi correct des IDs déjà vus
+    seen_ids         = set()
 
     print(f"\n[{subcategory_name}] {category_url}")
 
@@ -105,13 +143,12 @@ def scrape_ids_from_category(driver, category_url):
         url = f"{category_url}?p={page}"
         driver.get(url)
 
-        # FIX 2 : attente explicite au lieu d'un time.sleep(1) trop court
         try:
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-container"))
             )
         except:
-            break   # plus de produits ou page vide → fin de pagination
+            break
 
         products = driver.find_elements(By.CSS_SELECTOR, "div.product-container")
 
@@ -122,12 +159,11 @@ def scrape_ids_from_category(driver, category_url):
 
         for product in products:
             pid = product.get_attribute("data-product-id")
-            if pid and pid not in seen_ids:   # FIX 4 : on n'ajoute que les nouveaux IDs
+            if pid and pid not in seen_ids:
                 page_ids.append(pid)
                 seen_ids.add(pid)
                 id_to_subcat[pid] = subcategory_name
 
-        # FIX 4 : si aucun nouvel ID sur cette page → on s'arrête (était buggé avant)
         if not page_ids:
             break
 
@@ -138,7 +174,7 @@ def scrape_ids_from_category(driver, category_url):
 
 
 # =========================================================
-# 3. API BATCH (THREADING)
+# 3. API BATCH — via cloudscraper
 # =========================================================
 
 def fetch_batch(batch_ids, id_to_subcat, scraped_at):
@@ -147,7 +183,7 @@ def fetch_batch(batch_ids, id_to_subcat, scraped_at):
     url        = f"{API_URL}?ids={ids_string}"
 
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        response = scraper.get(url, timeout=15)
         response.raise_for_status()
         data = response.json()
 
@@ -205,23 +241,23 @@ def save_to_json(products, output_file):
 
 def run(output_file="data_raw/mytek_infoproducts.json"):
 
-    start  = time.time()
+    start = time.time()
+
+    # 1. Sous-catégories via cloudscraper (pas de Selenium ici)
+    subcategories = get_subcategories()
+
+    if not subcategories:
+        print("Aucune sous-catégorie trouvée — scraping annulé.")
+        return
+
+    # 2. IDs produits via Selenium (une seule instance)
     driver = webdriver.Chrome(options=get_chrome_options())
+    all_id_to_subcat = {}
 
     try:
-        subcategories = get_subcategories(driver)
-
-        # FIX 2 : arrêt propre si aucune sous-catégorie trouvée
-        if not subcategories:
-            print("Aucune sous-catégorie trouvée — scraping annulé.")
-            return
-
-        all_id_to_subcat = {}
-
         for sub in subcategories:
             id_map = scrape_ids_from_category(driver, sub)
             all_id_to_subcat.update(id_map)
-
     finally:
         driver.quit()
 
@@ -231,6 +267,7 @@ def run(output_file="data_raw/mytek_infoproducts.json"):
         print("Aucun produit trouvé — fichier JSON non créé.")
         return
 
+    # 3. Détails via API (cloudscraper)
     products = fetch_all_products(all_id_to_subcat)
     save_to_json(products, output_file)
 
