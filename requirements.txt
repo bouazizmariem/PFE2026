@@ -1,7 +1,7 @@
+scrapy
 selenium
 pymongo
 certifi
 dnspython
-cloudscraper
 beautifulsoup4
 requests

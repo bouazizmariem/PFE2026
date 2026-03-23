@@ -24,8 +24,9 @@ jobs:
           cache: "pip"
 
       # ── 3. Upgrade dépendances critiques ─────────────────
+      # FIX : scrapy ajouté ici pour être disponible avant tout import
       - name: Upgrade core dependencies
-        run: pip install --upgrade pymongo certifi dnspython cloudscraper beautifulsoup4   # ← FIX : cloudscraper ajouté
+        run: pip install --upgrade scrapy pymongo certifi dnspython beautifulsoup4 requests
 
       # ── 4. Chrome + ChromeDriver ─────────────────────────
       - name: Install Chrome
