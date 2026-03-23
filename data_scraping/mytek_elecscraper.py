@@ -23,7 +23,7 @@ BASE_CATEGORY = "https://www.mytek.tn/electromenager.html"
 API_URL       = "https://www.mytek.tn/opensearch_api/api/productData"
 
 HEADERS = {
-    "User-Agent":       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent":       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "X-Requested-With": "XMLHttpRequest",
     "Accept":           "application/json"
 }
@@ -33,9 +33,26 @@ MAX_WORKERS   = 5
 
 MAIN_CATEGORY = BASE_CATEGORY.split("/")[-1].replace(".html", "").replace("-", " ").title()
 
+# FIX : liste de sélecteurs candidats testés dans l'ordre
+# Le premier qui retourne des liens internes Mytek est utilisé
+SUBCATEGORY_SELECTORS = [
+    "ul.list-unstyled li a",
+    "ol.items li a",
+    "ul.items li a",
+    "div.block-content a",
+    "div.sidebar a",
+    "li.level1 a",
+    "li.level2 a",
+    "div.subcategories a",
+    "div.categories-menu a",
+    "div.category-description a",
+    "nav a",
+    "a[href*='/electromenager/']",   # fallback absolu : tous les liens de sous-cat
+]
+
 
 # =========================================================
-# UTILITAIRE — Options Chrome compatibles Docker/CI
+# UTILITAIRE — Options Chrome compatibles Docker/CI Ubuntu
 # =========================================================
 
 def get_chrome_options():
@@ -44,8 +61,16 @@ def get_chrome_options():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")        # FIX CI : pas de GPU sur Ubuntu runner
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")  # FIX 1 : anti-détection bot
+    options.add_argument("--ignore-certificate-errors")          # FIX CI : évite les erreurs SSL internes
+    options.add_argument("--allow-running-insecure-content")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    )
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     return options
@@ -54,6 +79,17 @@ def get_chrome_options():
 def url_to_name(url: str) -> str:
     slug = url.split("/")[-1].replace(".html", "")
     return slug.replace("-", " ").title()
+
+
+def is_valid_subcat_link(href: str) -> bool:
+    """Vérifie qu'un lien est bien une sous-catégorie Mytek valide."""
+    return (
+        href
+        and "mytek.tn" in href
+        and href != BASE_CATEGORY
+        and href.endswith(".html")
+        and "electromenager" in href   # reste dans la bonne catégorie
+    )
 
 
 # =========================================================
@@ -65,23 +101,49 @@ def get_subcategories(driver):
 
     driver.get(BASE_CATEGORY)
 
-    # FIX 2 : timeout augmenté à 30s pour GitHub Actions (réseau plus lent)
+    # FIX CI : sleep + wait combinés — le sleep laisse le JS
+    # s'initialiser avant que WebDriverWait commence à chercher
+    time.sleep(3)
+
+    # FIX : on attend que le body soit au moins chargé
     try:
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "ul.list-unstyled li a"))
+        WebDriverWait(driver, 60).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
     except Exception as e:
-        print(f"Timeout — page pas chargée ou sélecteur introuvable : {e}")
-        return []   # FIX 2 : retour propre au lieu d'un crash silencieux
+        print(f"Page non chargée du tout : {e}")
+        return []
 
-    elements = driver.find_elements(By.CSS_SELECTOR, "ul.list-unstyled li a")
-    subcategories = list(set([
-        el.get_attribute("href")
-        for el in elements
-        if el.get_attribute("href")
-        and "mytek.tn" in el.get_attribute("href")
-        and el.get_attribute("href") != BASE_CATEGORY   # FIX 3 : exclut la catégorie parente
-    ]))
+    print(f"  Titre page : {driver.title}")
+    print(f"  URL réelle : {driver.current_url}")
+
+    # FIX : essai de chaque sélecteur dans l'ordre jusqu'à trouver des liens
+    subcategories = []
+
+    for selector in SUBCATEGORY_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            links = list(set([
+                el.get_attribute("href")
+                for el in elements
+                if is_valid_subcat_link(el.get_attribute("href") or "")
+            ]))
+
+            if links:
+                print(f"  Sélecteur retenu : '{selector}' → {len(links)} sous-catégories")
+                subcategories = links
+                break
+            else:
+                print(f"  '{selector}' → 0 liens, essai suivant...")
+
+        except Exception as e:
+            print(f"  '{selector}' → erreur : {e}")
+            continue
+
+    if not subcategories:
+        # Dernier recours : dump HTML pour debug dans les logs CI
+        print("\n  AUCUN sélecteur n'a fonctionné.")
+        print(f"  HTML[:1000] :\n{driver.page_source[:1000]}")
 
     print(f"{len(subcategories)} sous-catégories trouvées")
     return subcategories
@@ -96,7 +158,7 @@ def scrape_ids_from_category(driver, category_url):
     id_to_subcat     = {}
     page             = 1
     subcategory_name = url_to_name(category_url)
-    seen_ids         = set()   # FIX 4 : suivi correct des IDs déjà vus
+    seen_ids         = set()
 
     print(f"\n[{subcategory_name}] {category_url}")
 
@@ -105,9 +167,8 @@ def scrape_ids_from_category(driver, category_url):
         url = f"{category_url}?p={page}"
         driver.get(url)
 
-        # FIX 2 : WebDriverWait remplace time.sleep(1) trop court
         try:
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-container"))
             )
         except:
@@ -122,12 +183,11 @@ def scrape_ids_from_category(driver, category_url):
 
         for product in products:
             pid = product.get_attribute("data-product-id")
-            if pid and pid not in seen_ids:   # FIX 4 : uniquement les nouveaux IDs
+            if pid and pid not in seen_ids:
                 page_ids.append(pid)
                 seen_ids.add(pid)
                 id_to_subcat[pid] = subcategory_name
 
-        # FIX 4 : aucun nouvel ID → fin de pagination (logique corrigée)
         if not page_ids:
             break
 
@@ -211,7 +271,6 @@ def run(output_file="data_raw/mytek_Electroproducts.json"):
     try:
         subcategories = get_subcategories(driver)
 
-        # FIX 2 : arrêt propre si aucune sous-catégorie trouvée
         if not subcategories:
             print("Aucune sous-catégorie trouvée — scraping annulé.")
             return

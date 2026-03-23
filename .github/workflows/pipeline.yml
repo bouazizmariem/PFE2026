@@ -24,8 +24,6 @@ jobs:
           cache: "pip"
 
       # ── 3. Upgrade pymongo, certifi, dnspython ───────────
-      #    FIX : doit être AVANT install dependencies et AVANT
-      #          tout appel MongoDB, pas à la fin du workflow
       - name: Upgrade pymongo and certifi
         run: pip install --upgrade pymongo certifi dnspython
 
@@ -42,14 +40,76 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 6. Vérification SSL (optionnel, utile pour debug) ─
-      #    FIX : déplacé ici, après l'installation, avant usage
+      # ── 6. Vérification SSL ───────────────────────────────
       - name: Check OpenSSL version
         run: python -c "import ssl; print(ssl.OPENSSL_VERSION)"
 
       # ── 7. Créer les dossiers de données ─────────────────
       - name: Create data folders
         run: mkdir -p data_raw data_clean
+
+      # ════════════════════════════════════════════════════
+      # DIAGNOSTIC CI — Vérifie que Mytek est accessible
+      # et affiche quel sélecteur fonctionne sur Ubuntu CI
+      # → Partager la sortie pour corriger les scrapers
+      # → Supprimer ce step une fois les scrapers corrigés
+      # ════════════════════════════════════════════════════
+
+      - name: Diagnose Mytek on CI
+        run: |
+          python -c "
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          import time
+
+          o = Options()
+          o.add_argument('--headless=new')
+          o.add_argument('--no-sandbox')
+          o.add_argument('--disable-dev-shm-usage')
+          o.add_argument('--disable-gpu')
+          o.add_argument('--window-size=1920,1080')
+          o.add_argument('--disable-blink-features=AutomationControlled')
+          o.add_argument('--disable-software-rasterizer')
+          o.add_argument('--ignore-certificate-errors')
+          o.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+          o.add_experimental_option('excludeSwitches', ['enable-automation'])
+          o.add_experimental_option('useAutomationExtension', False)
+
+          d = webdriver.Chrome(options=o)
+          d.get('https://www.mytek.tn/electromenager.html')
+          time.sleep(5)
+
+          print('TITRE  :', d.title)
+          print('URL    :', d.current_url)
+          print('HTML[:800]:', d.page_source[:800])
+
+          selectors = [
+              'ul.list-unstyled li a',
+              'div.category-description a',
+              'div.sidebar a',
+              'nav a',
+              'ul.items li a',
+              'ol.items li a',
+              'div.block-content a',
+              'a.level-top',
+              'li.level1 a',
+              'li.level2 a',
+              'div.subcategories a',
+              'div.categories-menu a',
+          ]
+          print()
+          for sel in selectors:
+              els = d.find_elements(By.CSS_SELECTOR, sel)
+              links = [e.get_attribute('href') for e in els
+                       if e.get_attribute('href')
+                       and 'mytek.tn' in (e.get_attribute('href') or '')]
+              print(f'[{sel}] -> {len(links)} liens')
+              for l in links[:3]:
+                  print(f'    {l}')
+
+          d.quit()
+          "
 
       # ════════════════════════════════════════════════════
       # SCRAPING
@@ -161,9 +221,8 @@ jobs:
       # INGESTION MONGODB ATLAS
       # ════════════════════════════════════════════════════
 
-      # FIX : DATA_FOLDER pointe vers data_clean où sont les fichiers nettoyés
       - name: Ingest to MongoDB Atlas
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
-          DATA_FOLDER: data_clean          # ← transmis au script database.py
+          DATA_FOLDER: data_clean
         run: python database.py
