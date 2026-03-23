@@ -3,6 +3,8 @@ import re
 import time
 from datetime import datetime
 
+from scrapy.utils import response
+
 SCRAPED_DATE = datetime.now().strftime("%Y-%m-%d")
 
 
@@ -67,13 +69,11 @@ class SpacenetInfoSpider(scrapy.Spider):
         self.logger.warning("=" * 50)
 
     def parse(self, response):
-        # ✅ Sélecteur corrigé
         for item in response.css("[data-id-product]"):
-            url = item.css("a::attr(href)").get()
+            url = item.css(".product_name a::attr(href)").get()
             if url:
                 yield scrapy.Request(url, callback=self.parse_product)
 
-        # Pagination
         next_pages = response.css("ul.page-list a.js-search-link::attr(href)").getall()
         for href in next_pages:
             if "page=" in href:
@@ -126,10 +126,10 @@ def run(output_file="data_raw/spacenet_Infoproducts.json"):
 
     spider_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # ✅ Chemin absolu résolu depuis le cwd du terminal (racine du projet)
+    
     output_abs = os.path.abspath(output_file)
 
-    # ✅ Crée le dossier data_raw/ si inexistant
+    
     os.makedirs(os.path.dirname(output_abs), exist_ok=True)
 
     result = subprocess.run(
