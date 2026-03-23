@@ -1,6 +1,7 @@
-selenium==4.27.1
-scrapy==2.11.2
-requests==2.31.0
-beautifulsoup4==4.12.2
-pymongo==4.10.1
+selenium
+pymongo
 certifi
+dnspython
+cloudscraper
+beautifulsoup4
+requests

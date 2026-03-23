@@ -2,8 +2,8 @@ name: Ecommerce scraping pipeline
 
 on:
   schedule:
-    - cron: "0 */12 * * *"   # toutes les 12h automatiquement
-  workflow_dispatch:          # bouton Run manuel sur GitHub
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
 
 jobs:
   pipeline:
@@ -23,9 +23,9 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      # ── 3. Upgrade pymongo, certifi, dnspython ───────────
-      - name: Upgrade pymongo and certifi
-        run: pip install --upgrade pymongo certifi dnspython
+      # ── 3. Upgrade dépendances critiques ─────────────────
+      - name: Upgrade core dependencies
+        run: pip install --upgrade pymongo certifi dnspython cloudscraper beautifulsoup4   # ← FIX : cloudscraper ajouté
 
       # ── 4. Chrome + ChromeDriver ─────────────────────────
       - name: Install Chrome
@@ -47,8 +47,6 @@ jobs:
       # ── 7. Créer les dossiers de données ─────────────────
       - name: Create data folders
         run: mkdir -p data_raw data_clean
-
-      
 
       # ════════════════════════════════════════════════════
       # SCRAPING
