@@ -120,7 +120,7 @@ class TunisianetElectroSpider(scrapy.Spider):
         }
 
 
-def run(output_file="data_raw/tunisianet_Electroproducts.json"):  # ← chemin relatif simple
+def run(output_file="data_raw/tunisianet_Electroproducts.json"):  
     import subprocess
     import sys
     import os
@@ -131,7 +131,7 @@ def run(output_file="data_raw/tunisianet_Electroproducts.json"):  # ← chemin r
         [
             sys.executable, "-m", "scrapy", "runspider",
             os.path.abspath(__file__),
-            "-O", os.path.abspath(output_file),  # ← chemin absolu résolu depuis le cwd
+            "-O", os.path.abspath(output_file),  
             "-s", "LOG_LEVEL=WARNING",
         ],
         cwd=spider_dir,

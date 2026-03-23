@@ -14,7 +14,7 @@ MONGO_URI = os.environ.get(
 )
 DB_NAME        = "ecommerce_db"
 COLLECTION_NAME = "products"
-DATA_FOLDER    = os.path.join(os.path.dirname(__file__), "data")   # ← FIX : dossier "data/" à côté du script
+DATA_FOLDER    = os.path.join(os.path.dirname(__file__), "data_clean")  
 
 
 # ============================
