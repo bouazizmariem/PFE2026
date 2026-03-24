@@ -8,7 +8,8 @@ on:
 jobs:
   scrape:
     runs-on: self-hosted
-
+    env:
+      PYTHONIOENCODING: utf-8   
     steps:
 
       # ── 1. Récupérer le code ──────────────────────────────

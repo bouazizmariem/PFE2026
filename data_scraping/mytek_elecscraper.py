@@ -162,7 +162,7 @@ class MytekElecSpider(scrapy.Spider):
 # RUN
 # =========================
 
-def run(output_file="data_raw/mytek_products.json"):
+def run(output_file="data_raw/mytek_electroproducts.json"):
     import os
     from scrapy.crawler import CrawlerProcess
 
