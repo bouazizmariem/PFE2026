@@ -7,7 +7,7 @@ on:
 
 jobs:
   scrape:
-    runs-on: self-hosted 
+    runs-on: self-hosted
 
     steps:
 
@@ -23,7 +23,6 @@ jobs:
           cache: "pip"
 
       # ── 3. Upgrade dépendances critiques ─────────────────
-      # FIX : scrapy ajouté ici pour être disponible avant tout import
       - name: Upgrade core dependencies
         run: pip install --upgrade scrapy pymongo certifi dnspython beautifulsoup4 requests
 
@@ -46,43 +45,32 @@ jobs:
 
       # ── 7. Créer les dossiers de données ─────────────────
       - name: Create data folders
-        run: mkdir -p data_raw data_clean
+        run: |
+          New-Item -ItemType Directory -Force -Path data_raw
+          New-Item -ItemType Directory -Force -Path data_clean
+        shell: powershell
 
       # ════════════════════════════════════════════════════
       # SCRAPING
       # ════════════════════════════════════════════════════
       - name: Scrape Mytek Electromenager
         run: |
-                python -c "
-                import sys
-                sys.path.insert(0, 'data_scraping')
-                import mytek_elecscraper as s
-                s.run(output_file='data_raw/mytek_Electroproducts.json')
-                "
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_elecscraper as s
+          s.run(output_file='data_raw/mytek_Electroproducts.json')
+          "
 
       - name: Scrape Mytek Informatique
         run: |
-                python -c "
-                import sys
-                sys.path.insert(0, 'data_scraping')
-                import mytek_infoscraper as s
-                s.run(output_file='data_raw/mytek_Infoproducts.json')
-      - name: Clean Mytek
-        run: |
           python -c "
           import sys
-          sys.path.insert(0, 'data_cleaning')
-          import cleanMytek as c
-          c.main(
-              input_file='data_raw/mytek_Electroproducts.json',
-              output_file='data_clean/clean_mytekElectroproducts.json'
-          )
-          c.main(
-              input_file='data_raw/mytek_Infoproducts.json',
-              output_file='data_clean/clean_mytekInfoproducts.json'
-          )
+          sys.path.insert(0, 'data_scraping')
+          import mytek_infoscraper as s
+          s.run(output_file='data_raw/mytek_Infoproducts.json')
           "
-     
+
       - name: Scrape Spacenet Electromenager
         run: |
           python -c "
@@ -118,13 +106,25 @@ jobs:
           import tunisianet_Infospider as s
           s.run(output_file='data_raw/tunisianet_Infoproducts.json')
           "
-      
-          "
+
       # ════════════════════════════════════════════════════
       # CLEANING
       # ════════════════════════════════════════════════════
-
-      
+      - name: Clean Mytek
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_cleaning')
+          import cleanMytek as c
+          c.main(
+              input_file='data_raw/mytek_Electroproducts.json',
+              output_file='data_clean/clean_mytekElectroproducts.json'
+          )
+          c.main(
+              input_file='data_raw/mytek_Infoproducts.json',
+              output_file='data_clean/clean_mytekInfoproducts.json'
+          )
+          "
 
       - name: Clean Spacenet and Tunisianet
         run: |
@@ -153,11 +153,10 @@ jobs:
               site_name='tunisianet'
           )
           "
-      
+
       # ════════════════════════════════════════════════════
       # INGESTION MONGODB ATLAS
       # ════════════════════════════════════════════════════
-
       - name: Ingest to MongoDB Atlas
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
