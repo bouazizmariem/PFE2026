@@ -6,9 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  pipeline:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+  scrape:
+    runs-on: self-hosted 
 
     steps:
 
