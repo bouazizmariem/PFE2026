@@ -57,7 +57,7 @@ jobs:
                 python -c "
                 import sys
                 sys.path.insert(0, 'data_scraping')
-                import mytek_elec_spider as s
+                import mytek_elecscraper as s
                 s.run(output_file='data_raw/mytek_Electroproducts.json')
                 "
 
@@ -66,7 +66,7 @@ jobs:
                 python -c "
                 import sys
                 sys.path.insert(0, 'data_scraping')
-                import mytek_info_spider as s
+                import mytek_infoscraper as s
                 s.run(output_file='data_raw/mytek_Infoproducts.json')
       - name: Clean Mytek
         run: |
