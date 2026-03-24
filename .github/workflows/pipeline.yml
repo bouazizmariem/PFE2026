@@ -89,7 +89,23 @@ jobs:
           import tunisianet_Infospider as s
           s.run(output_file='data_raw/tunisianet_Infoproducts.json')
           "
+      - name: Scrape Mytek Electromenager
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_elec_spider as s
+          s.run(output_file='data_raw/mytek_Electroproducts.json')
+          "
 
+      - name: Scrape Mytek Informatique
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_info_spider as s
+          s.run(output_file='data_raw/mytek_Infoproducts.json')
+          "
       # ════════════════════════════════════════════════════
       # CLEANING
       # ════════════════════════════════════════════════════
@@ -123,7 +139,21 @@ jobs:
               site_name='tunisianet'
           )
           "
-
+      - name: Clean Mytek
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_cleaning')
+          import cleanMytek as c
+          c.main(
+              input_file='data_raw/mytek_Electroproducts.json',
+              output_file='data_clean/clean_mytekElectroproducts.json'
+          )
+          c.main(
+              input_file='data_raw/mytek_Infoproducts.json',
+              output_file='data_clean/clean_mytekInfoproducts.json'
+          )
+          "
       # ════════════════════════════════════════════════════
       # INGESTION MONGODB ATLAS
       # ════════════════════════════════════════════════════
