@@ -10,7 +10,7 @@ import certifi
 
 MONGO_URI = os.environ.get(
     "MONGO_URI",
-    "mongodb+srv://mariembouaziz:12345@cluster0.dlbfsmd.mongodb.net/ecommerce_db?retryWrites=true&w=majority"
+    "mongodb+srv://mariembouaziz:mariem1234@cluster0.dlbfsmd.mongodb.net/ecommerce_db?retryWrites=true&w=majority"
 )
 DB_NAME        = "ecommerce_db"
 COLLECTION_NAME = "products"
