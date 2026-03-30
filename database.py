@@ -25,15 +25,15 @@ def get_collection():
     """Crée la connexion uniquement quand on en a besoin."""
     client = MongoClient(
         MONGO_URI,
-        tlsCAFile=certifi.where(),              # ← FIX SSL : certificats CA à jour
-        serverSelectionTimeoutMS=20000,         # timeout 20s
+        tlsCAFile=certifi.where(),              
+        serverSelectionTimeoutMS=20000,        
         connectTimeoutMS=20000,
         socketTimeoutMS=20000,
     )
     db         = client[DB_NAME]
     collection = db[COLLECTION_NAME]
     collection.create_index("url", unique=True)
-    return client, collection                   # ← FIX : on retourne aussi le client pour pouvoir le fermer
+    return client, collection                  
 
 
 # ============================
@@ -92,7 +92,7 @@ def process_files():
     print("Connexion à MongoDB Atlas...")
 
     try:
-        client, collection = get_collection()   # ← FIX : récupère le client aussi
+        client, collection = get_collection()   
     except Exception as e:
         print(f"Erreur de connexion MongoDB : {e}")
         raise
@@ -145,7 +145,7 @@ def process_files():
                     total_skipped   += 1
 
     finally:
-        client.close()                          # ← FIX : fermeture propre de la connexion
+        client.close()                          
 
     print("\n==============================")
     print("Pipeline terminé")
