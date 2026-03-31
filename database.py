@@ -8,10 +8,10 @@ import certifi
 # CONFIG
 # ============================
 
-MONGO_URI = os.environ.get(
-    "MONGO_URI",
-    "mongodb+srv://mariembouaziz:mariem1234@cluster0.dlbfsmd.mongodb.net/ecommerce_db?retryWrites=true&w=majority"
-)
+MONGO_URI = os.environ.get("MONGO_URI")
+
+if not MONGO_URI:
+    raise ValueError("MONGO_URI environment variable is not set.")
 DB_NAME        = "ecommerce_db"
 COLLECTION_NAME = "products"
 DATA_FOLDER    = os.path.join(os.path.dirname(__file__), "data_clean")  

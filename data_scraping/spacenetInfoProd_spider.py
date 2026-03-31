@@ -3,8 +3,6 @@ import re
 import time
 from datetime import datetime
 
-from scrapy.utils import response
-
 SCRAPED_DATE = datetime.now().strftime("%Y-%m-%d")
 
 
@@ -85,8 +83,20 @@ class SpacenetInfoSpider(scrapy.Spider):
         if match:
             product_id = match.group(1)
 
-        final_price   = clean_price(response.css(".current-price span::text").get())
-        regular_price = clean_price(response.css(".regular-price::text").get())
+        final_price = clean_price(response.css(".current-price span::text").get())
+
+        # ─── Correction sélecteur price_original ───────────────────────────
+        # Sélecteur plus précis pour éviter de récupérer des frais de
+        # livraison ou prix HT qui partagent la classe .regular-price
+        regular_price = clean_price(
+            response.css(".product-prices .regular-price::text").get()
+        )
+
+        # Validation : price_original doit être strictement > price_final
+        if regular_price is not None and final_price is not None:
+            if regular_price <= final_price:
+                regular_price = None
+        # ───────────────────────────────────────────────────────────────────
 
         specs = {}
         keys   = response.css("dl.data-sheet dt.name::text").getall()
@@ -125,11 +135,7 @@ def run(output_file="data_raw/spacenet_Infoproducts.json"):
     import os
 
     spider_dir = os.path.dirname(os.path.abspath(__file__))
-
-    
     output_abs = os.path.abspath(output_file)
-
-    
     os.makedirs(os.path.dirname(output_abs), exist_ok=True)
 
     result = subprocess.run(

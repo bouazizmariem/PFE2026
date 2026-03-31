@@ -8,54 +8,48 @@ on:
 jobs:
   scrape:
     runs-on: self-hosted
-    timeout-minutes: 120    
+    timeout-minutes: 120
     env:
       PYTHONIOENCODING: utf-8
+
     steps:
 
-      # ── 1. Récupérer le code ──────────────────────────────
+      # ── 1. Checkout ───────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Python ────────────────────────────────────────
+      # ── 2. Python ─────────────────────────────────────────
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
 
-      # ── 3. Upgrade dépendances critiques ─────────────────
-      - name: Upgrade core dependencies
-        run: pip install --upgrade scrapy pymongo certifi dnspython beautifulsoup4 requests
-
-      # ── 4. Chrome + ChromeDriver ─────────────────────────
+      # ── 3. Chrome + ChromeDriver ──────────────────────────
       - name: Install Chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
 
-      - name: Upgrade Selenium
-        run: pip install --upgrade selenium
-
-      # ── 5. Dépendances Python ────────────────────────────
+      # ── 4. All dependencies (one step, upgrade wins) ──────
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install --upgrade scrapy pymongo certifi dnspython beautifulsoup4 requests selenium
 
-      # ── 6. Vérification SSL ───────────────────────────────
+      # ── 5. SSL check ──────────────────────────────────────
       - name: Check OpenSSL version
         run: python -c "import ssl; print(ssl.OPENSSL_VERSION)"
 
-      # ── 7. Créer les dossiers de données ─────────────────
+      # ── 6. Create data folders ────────────────────────────
       - name: Create data folders
-        run: |
-          New-Item -ItemType Directory -Force -Path data_raw
-          New-Item -ItemType Directory -Force -Path data_clean
-        shell: powershell
+        run: python -c "import os; os.makedirs('data_raw', exist_ok=True); os.makedirs('data_clean', exist_ok=True)"
 
-      # ════════════════════════════════════════════════════
-      # SCRAPING
-      # ════════════════════════════════════════════════════
+      # ══════════════════════════════════════════════════════
+      # SCRAPING (continue-on-error so one failure doesn't kill the pipeline)
+      # ══════════════════════════════════════════════════════
       - name: Scrape Mytek Electromenager
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -65,6 +59,7 @@ jobs:
           "
 
       - name: Scrape Mytek Informatique
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -74,6 +69,7 @@ jobs:
           "
 
       - name: Scrape Spacenet Electromenager
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -83,6 +79,7 @@ jobs:
           "
 
       - name: Scrape Spacenet Informatique
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -92,6 +89,7 @@ jobs:
           "
 
       - name: Scrape Tunisianet Electromenager
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -101,6 +99,7 @@ jobs:
           "
 
       - name: Scrape Tunisianet Informatique
+        continue-on-error: true
         run: |
           python -c "
           import sys
@@ -109,56 +108,48 @@ jobs:
           s.run(output_file='data_raw/tunisianet_Infoproducts.json')
           "
 
-      # ════════════════════════════════════════════════════
-      # CLEANING
-      # ════════════════════════════════════════════════════
+      # ══════════════════════════════════════════════════════
+      # CLEANING (skips missing files gracefully)
+      # ══════════════════════════════════════════════════════
       - name: Clean Mytek
         run: |
           python -c "
-          import sys
+          import sys, os
           sys.path.insert(0, 'data_cleaning')
           import cleanMytek as c
-          c.main(
-              input_file='data_raw/mytek_Electroproducts.json',
-              output_file='data_clean/clean_mytekElectroproducts.json'
-          )
-          c.main(
-              input_file='data_raw/mytek_Infoproducts.json',
-              output_file='data_clean/clean_mytekInfoproducts.json'
-          )
+          pairs = [
+              ('data_raw/mytek_Electroproducts.json', 'data_clean/clean_mytekElectroproducts.json'),
+              ('data_raw/mytek_Infoproducts.json',    'data_clean/clean_mytekInfoproducts.json'),
+          ]
+          for inp, out in pairs:
+              if os.path.exists(inp):
+                  c.main(input_file=inp, output_file=out)
+              else:
+                  print(f'Skipping missing file: {inp}')
           "
 
       - name: Clean Spacenet and Tunisianet
         run: |
           python -c "
-          import sys
+          import sys, os
           sys.path.insert(0, 'data_cleaning')
           import cleanSpacenetTunisianet as c
-          c.main(
-              input_file='data_raw/spacenet_products.json',
-              output_file='data_clean/clean_spacenetElectroproducts.json',
-              site_name='spacenet'
-          )
-          c.main(
-              input_file='data_raw/spacenet_Infoproducts.json',
-              output_file='data_clean/clean_spacenetInfoproducts.json',
-              site_name='spacenet'
-          )
-          c.main(
-              input_file='data_raw/tunisianet_Electroproducts.json',
-              output_file='data_clean/clean_TunisianetElectroproducts.json',
-              site_name='tunisianet'
-          )
-          c.main(
-              input_file='data_raw/tunisianet_Infoproducts.json',
-              output_file='data_clean/clean_TunisianetInfoproducts.json',
-              site_name='tunisianet'
-          )
+          pairs = [
+              ('data_raw/spacenet_products.json',         'data_clean/clean_spacenetElectroproducts.json',  'spacenet'),
+              ('data_raw/spacenet_Infoproducts.json',     'data_clean/clean_spacenetInfoproducts.json',     'spacenet'),
+              ('data_raw/tunisianet_Electroproducts.json','data_clean/clean_TunisianetElectroproducts.json','tunisianet'),
+              ('data_raw/tunisianet_Infoproducts.json',   'data_clean/clean_TunisianetInfoproducts.json',   'tunisianet'),
+          ]
+          for inp, out, site in pairs:
+              if os.path.exists(inp):
+                  c.main(input_file=inp, output_file=out, site_name=site)
+              else:
+                  print(f'Skipping missing file: {inp}')
           "
 
-      # ════════════════════════════════════════════════════
-      # INGESTION MONGODB ATLAS
-      # ════════════════════════════════════════════════════
+      # ══════════════════════════════════════════════════════
+      # MONGODB INGESTION
+      # ══════════════════════════════════════════════════════
       - name: Ingest to MongoDB Atlas
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}

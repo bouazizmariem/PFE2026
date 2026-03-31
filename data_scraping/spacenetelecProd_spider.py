@@ -31,7 +31,6 @@ class SpacenetSpider(scrapy.Spider):
     MAIN_CATEGORY = "Electroménager"
     start_urls = ["https://spacenet.tn/159-electromenager-tunisie"]
 
-    # ← custom_settings N'A PLUS de FEEDS (géré par run())
     custom_settings = {
         "CONCURRENT_REQUESTS": 64,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 64,
@@ -44,7 +43,6 @@ class SpacenetSpider(scrapy.Spider):
         "RETRY_HTTP_CODES": [500, 502, 503, 504, 408, 429],
         "DOWNLOAD_TIMEOUT": 60,
         "LOG_LEVEL": "WARNING",
-        # ← FEEDS supprimé d'ici
     }
 
     def __init__(self, *args, **kwargs):
@@ -85,8 +83,23 @@ class SpacenetSpider(scrapy.Spider):
         if match:
             product_id = match.group(1)
 
-        final_price   = clean_price(response.css(".current-price span::text").get())
-        regular_price = clean_price(response.css(".regular-price::text").get())
+        final_price = clean_price(response.css(".current-price span::text").get())
+
+        # ─── Correction sélecteur price_original ───────────────────────────
+        # On cible uniquement .product-prices .regular-price pour éviter
+        # de récupérer des frais de livraison ou prix HT qui partagent
+        # la même classe .regular-price ailleurs sur la page
+        regular_price = clean_price(
+            response.css(".product-prices .regular-price::text").get()
+        )
+
+        # Validation : price_original doit être strictement > price_final
+        # Si ce n'est pas le cas, on l'invalide plutôt que de stocker
+        # une valeur absurde dans les raw data
+        if regular_price is not None and final_price is not None:
+            if regular_price <= final_price:
+                regular_price = None
+        # ───────────────────────────────────────────────────────────────────
 
         specs = {}
         keys   = response.css("dl.data-sheet dt.name::text").getall()
@@ -119,19 +132,13 @@ class SpacenetSpider(scrapy.Spider):
         }
 
 
-
-
 def run(output_file="data_raw/spacenet_Electroproducts.json"):
     import subprocess
     import sys
     import os
 
     spider_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    
     output_abs = os.path.abspath(output_file)
-    
-    
     os.makedirs(os.path.dirname(output_abs), exist_ok=True)
 
     result = subprocess.run(
