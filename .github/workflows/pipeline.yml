@@ -45,7 +45,108 @@ jobs:
       - name: Create data folders
         run: python -c "import os; os.makedirs('data_raw', exist_ok=True); os.makedirs('data_clean', exist_ok=True)"
 
-      
+      # ══════════════════════════════════════════════════════
+      # SCRAPING (continue-on-error so one failure doesn't kill the pipeline)
+      # ══════════════════════════════════════════════════════
+      - name: Scrape Mytek Electromenager
+        continue-on-error: true
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_elecscraper as s
+          s.run(output_file='data_raw/mytek_Electroproducts.json')
+          "
+
+      - name: Scrape Mytek Informatique
+        continue-on-error: true
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import mytek_infoscraper as s
+          s.run(output_file='data_raw/mytek_Infoproducts.json')
+          "
+
+      - name: Scrape Spacenet Electromenager
+        continue-on-error: true
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import spacenetelecProd_spider as s
+          s.run(output_file='data_raw/spacenet_products.json')
+          "
+
+      - name: Scrape Spacenet Informatique
+        continue-on-error: true
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import spacenetInfoProd_spider as s
+          s.run(output_file='data_raw/spacenet_Infoproducts.json')
+          "
+
+      - name: Scrape Tunisianet Electromenager
+        continue-on-error: true
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import tunisianet_Electrospider as s
+          s.run(output_file='data_raw/tunisianet_Electroproducts.json')
+          "
+
+      - name: Scrape Tunisianet Informatique
+        continue-on-error: true
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'data_scraping')
+          import tunisianet_Infospider as s
+          s.run(output_file='data_raw/tunisianet_Infoproducts.json')
+          "
+
+      # ══════════════════════════════════════════════════════
+      # CLEANING (skips missing files gracefully)
+      # ══════════════════════════════════════════════════════
+      - name: Clean Mytek
+        run: |
+          python -c "
+          import sys, os
+          sys.path.insert(0, 'data_cleaning')
+          import cleanMytek as c
+          pairs = [
+              ('data_raw/mytek_Electroproducts.json', 'data_clean/clean_mytekElectroproducts.json'),
+              ('data_raw/mytek_Infoproducts.json',    'data_clean/clean_mytekInfoproducts.json'),
+          ]
+          for inp, out in pairs:
+              if os.path.exists(inp):
+                  c.main(input_file=inp, output_file=out)
+              else:
+                  print(f'Skipping missing file: {inp}')
+          "
+
+      - name: Clean Spacenet and Tunisianet
+        run: |
+          python -c "
+          import sys, os
+          sys.path.insert(0, 'data_cleaning')
+          import cleanSpacenetTunisianet as c
+          pairs = [
+              ('data_raw/spacenet_products.json',         'data_clean/clean_spacenetElectroproducts.json',  'spacenet'),
+              ('data_raw/spacenet_Infoproducts.json',     'data_clean/clean_spacenetInfoproducts.json',     'spacenet'),
+              ('data_raw/tunisianet_Electroproducts.json','data_clean/clean_TunisianetElectroproducts.json','tunisianet'),
+              ('data_raw/tunisianet_Infoproducts.json',   'data_clean/clean_TunisianetInfoproducts.json',   'tunisianet'),
+          ]
+          for inp, out, site in pairs:
+              if os.path.exists(inp):
+                  c.main(input_file=inp, output_file=out, site_name=site)
+              else:
+                  print(f'Skipping missing file: {inp}')
+          "
+
       # ══════════════════════════════════════════════════════
       # MONGODB INGESTION
       # ══════════════════════════════════════════════════════
