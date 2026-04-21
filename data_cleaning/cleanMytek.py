@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from normalize_specs import normalize_specs
 
 
 # -----------------------------
@@ -131,44 +132,33 @@ def clean_garantie(value):
 
 
 # -----------------------------
-# Extraire specifications
+# Extraire specifications depuis description texte
 # -----------------------------
 def extract_specifications(description):
     if not description:
         return {}
 
     specs = {}
-    description = description.replace("\n", " ")
-    parts = description.split("-")
+    # Normalise les espaces insécables et multiples
+    text = description.replace("\xa0", " ").replace("&amp;", "&").replace("&nbsp;", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Découpe sur " - " suivi d'une majuscule pour éviter de couper dans les valeurs
+    parts = re.split(r"\s+-\s+(?=[A-ZÀ-Üa-zà-ü])", text)
 
     for part in parts:
         part = part.strip()
         if ":" in part:
-            key, value = part.split(":", 1)
-            key = key.strip()
+            key, _, value = part.partition(":")
+            key   = key.strip()
             value = value.strip()
-            if key and value:
+            # Ignorer si la "clé" ressemble à une phrase (nom du produit, etc.)
+            if key and value and len(key.split()) <= 6:
+                if "garantie" in key.lower():
+                    value = clean_garantie(value)
                 specs[key] = value
 
     return specs
-
-
-# -----------------------------
-# Nettoyer specifications
-# -----------------------------
-def clean_specifications(specs):
-    cleaned = {}
-
-    for key, value in specs.items():
-        key = key.strip()
-        value = value.strip()
-
-        if "garantie" in key.lower():
-            value = clean_garantie(value)
-
-        cleaned[key] = value
-
-    return cleaned
 
 
 # -----------------------------
@@ -211,10 +201,10 @@ def transform_product(product):
         }
     ]
 
-    description          = clean_description(product.get("description"))
+    description               = clean_description(product.get("description"))
     cleaned["description"]    = description
-    specs                     = extract_specifications(description)
-    cleaned["specifications"] = clean_specifications(specs)
+    raw_specs                 = extract_specifications(description)
+    cleaned["specifications"] = normalize_specs(raw_specs)
     cleaned["url"]            = product.get("url")
 
     return cleaned

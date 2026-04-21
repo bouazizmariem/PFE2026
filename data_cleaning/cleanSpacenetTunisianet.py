@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from normalize_specs import normalize_specs
 
 
 # -----------------------------
@@ -135,7 +136,7 @@ def transform_product(product, site_name):
     ]
 
     cleaned["description"]    = clean_description(product.get("description"))
-    cleaned["specifications"] = product.get("specifications", {})
+    cleaned["specifications"] = normalize_specs(product.get("specifications", {}))
     cleaned["url"]            = product.get("url")
 
     return cleaned
