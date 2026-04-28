@@ -1,85 +1,77 @@
 import scrapy
-import re
 import json
 import time
 import requests
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-SCRAPED_DATE  = datetime.now().strftime("%Y-%m-%d")
 BASE_CATEGORY = "https://www.mytek.tn/electromenager.html"
-API_URL       = "https://www.mytek.tn/opensearch_api/api/productData"
-BATCH_SIZE    = 40
+VOLATILE_API  = "https://www.mytek.tn/api/products/volatile"
+BATCH_SIZE    = 48
 MAX_WORKERS   = 5
 
-# 🔥 HEADERS navigateur (IMPORTANT pour GitHub Actions)
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Connection": "keep-alive",
+    "Referer": "https://www.mytek.tn/",
 }
 
 API_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "X-Requested-With": "XMLHttpRequest",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json",
+    "Referer": "https://www.mytek.tn/",
 }
 
 
 def url_to_name(url: str) -> str:
-    parts = url.rstrip("/").split("/")
-    if len(parts) >= 1:
-        slug = parts[-1].replace(".html", "")
-        return slug.replace("-", " ").title()
-    return "Inconnu"
+    slug = url.rstrip("/").split("/")[-1].replace(".html", "")
+    return slug.replace("-", " ").title()
 
 
 # =========================
-# API BATCH
+# VOLATILE API — prix live (optionnel)
 # =========================
 
-def fetch_batch(batch_ids, id_to_subcat, scraped_at):
+def fetch_volatile_batch(batch_ids):
+    """Prix/stock live depuis l'API volatile (complète les data-attributes)."""
     try:
-        response = requests.get(
-            f"{API_URL}?ids={','.join(batch_ids)}",
+        r = requests.get(
+            VOLATILE_API,
+            params={"ids": ",".join(batch_ids)},
             headers=API_HEADERS,
             timeout=15
         )
-        response.raise_for_status()
-        data = response.json()
-
-        if isinstance(data, dict):
-            products = list(data.values())
-            for p in products:
-                pid = str(p.get("id", ""))
-                p["category"]    = "Electroménager"
-                p["subcategory"] = id_to_subcat.get(pid)
-                p["scraped_at"]  = scraped_at
-            return products
-
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
     except Exception as e:
-        print(f"Erreur API batch : {e}")
+        print(f"  ❌ Volatile batch: {e}")
+        return {}
 
-    return []
 
+def enrich_with_volatile(products):
+    """Enrichit les produits avec les données live de l'API volatile."""
+    ids     = [p["id"] for p in products]
+    batches = [ids[i:i+BATCH_SIZE] for i in range(0, len(ids), BATCH_SIZE)]
+    volatile_map = {}
 
-def fetch_all_products(id_to_subcat):
-    print(f"\nFetch API pour {len(id_to_subcat)} produits...")
-    scraped_at   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    product_ids  = list(id_to_subcat.keys())
-    all_products = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = [ex.submit(fetch_volatile_batch, b) for b in batches]
+        for f in as_completed(futures):
+            volatile_map.update(f.result())
 
-    batches = [product_ids[i:i+BATCH_SIZE] for i in range(0, len(product_ids), BATCH_SIZE)]
+    for p in products:
+        live = volatile_map.get(str(p["id"]), {})
+        if live:
+            # Priorité aux données live pour prix et stock
+            p["final_price"] = live.get("final_price", p.get("final_price"))
+            p["price"]       = live.get("price",       p.get("price"))
+            p["erpstock"]    = live.get("erpstock",    p.get("erpstock"))
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(fetch_batch, batch, id_to_subcat, scraped_at) for batch in batches]
-        for i, future in enumerate(as_completed(futures), 1):
-            all_products.extend(future.result())
-            print(f"Batch {i}/{len(batches)} OK")
-
-    print(f"Total produits récupérés : {len(all_products)}")
-    return all_products
+    return products
 
 
 # =========================
@@ -91,107 +83,110 @@ class MytekElecSpider(scrapy.Spider):
     start_urls = [BASE_CATEGORY]
 
     custom_settings = {
-        "CONCURRENT_REQUESTS": 8,
-        "DOWNLOAD_DELAY": 0.5,
+        "CONCURRENT_REQUESTS": 4,
+        "DOWNLOAD_DELAY": 1,
         "AUTOTHROTTLE_ENABLED": True,
         "RETRY_TIMES": 3,
         "DOWNLOAD_TIMEOUT": 60,
         "LOG_LEVEL": "WARNING",
-
-        # 🔥 FIX GitHub Actions
         "DEFAULT_REQUEST_HEADERS": HEADERS,
-        "REQUEST_FINGERPRINTER_IMPLEMENTATION": "2.7",
         "ROBOTSTXT_OBEY": False,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._start_time   = None
-        self._id_to_subcat = {}
+        self._products = []
 
-    def start_requests(self):
-        self._start_time = time.perf_counter()
-        self.logger.warning("Scraping démarré")
-
+    async def start(self):
         for url in self.start_urls:
             yield scrapy.Request(url, headers=HEADERS)
 
     def parse(self, response):
-        self.logger.warning(f"STATUS: {response.status} | HTML size: {len(response.text)}")
+        self.logger.warning(f"STATUS: {response.status} | HTML: {len(response.text)} chars")
 
-        subcat_links = list(set([
+        links = set(
             href for href in response.css("ul.list-unstyled li a::attr(href)").getall()
             if href and "mytek.tn" in href and href.endswith(".html")
-        ]))
+        )
+        self.logger.warning(f"{len(links)} sous-catégories trouvées")
 
-        self.logger.warning(f"{len(subcat_links)} sous-catégories trouvées")
-
-        for href in subcat_links:
+        for href in links:
             yield scrapy.Request(href, callback=self.parse_listing, headers=HEADERS)
 
     def parse_listing(self, response):
-        subcategory_name = url_to_name(response.url)
-        ids_found = 0
+        subcat_name = url_to_name(response.url)
+        scraped_at  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        for script in response.css("script::text").getall():
-            if "INITIAL_PRODUCTS_DATA" in script:
-                match = re.search(r"INITIAL_PRODUCTS_DATA\s*=\s*(\[.*?\]);", script, re.DOTALL)
-                if match:
-                    try:
-                        products_data = json.loads(match.group(1))
-                        for item in products_data:
-                            pid = str(item.get("id", ""))
-                            if pid:
-                                self._id_to_subcat[pid] = subcategory_name
-                                ids_found += 1
-                    except:
-                        pass
-                break
+        # ── Extraction directe depuis les data-attributes ──
+        cards = response.css("[data-id]")
 
-        if ids_found:
-            self.logger.warning(f"[{subcategory_name}] {ids_found} IDs")
+        for card in cards:
+            g = card.attrib.get  # raccourci
+
+            pid = g("data-id", "").strip()
+            if not pid:
+                continue
+
+            product = {
+                "id":          pid,
+                "name":        g("data-name", "").strip(),
+                "sku":         g("data-sku", "").strip(),
+                "url":         g("data-url", "").strip(),
+                "final_price": g("data-final-price"),
+                "price":       g("data-price"),
+                "image":       g("data-image", "").strip(),
+                "erpstock":    {"label": g("data-erpstock", "").strip()},
+                "manufacturer": {"label": g("data-manufacturer", "").strip()},
+                "description": g("data-description", "").strip(),
+                "category":    "Electroménager",
+                "subcategory": subcat_name,
+                "scraped_at":  scraped_at,
+            }
+            self._products.append(product)
+
+        # ── Pagination ──
+        next_page = response.css("a.next::attr(href), a[rel='next']::attr(href)").get()
+        if next_page:
+            yield scrapy.Request(next_page, callback=self.parse_listing, headers=HEADERS)
         else:
-            self.logger.warning(f"[{subcategory_name}] ❌ Aucun ID (probablement bloqué)")
+            self.logger.warning(f"[{subcat_name}] ✅ {len(cards)} produits")
 
     def closed(self, reason):
-        elapsed = time.perf_counter() - self._start_time
-        self.logger.warning(f"IDs collectés : {len(self._id_to_subcat)}")
+        self.logger.warning(f"Total produits scrapés : {len(self._products)}")
 
 
 # =========================
 # RUN
 # =========================
 
-def run(output_file="data_raw/mytek_electroproducts.json"):
+def run(output_file="data_raw/mytek_Electroproducts.json"):
     import os
     from scrapy.crawler import CrawlerProcess
 
-    output_abs = os.path.abspath(output_file)
-    os.makedirs(os.path.dirname(output_abs), exist_ok=True)
-
-    id_to_subcat = {}
+    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+    all_products = []
 
     class CollectorSpider(MytekElecSpider):
         def closed(self, reason):
             super().closed(reason)
-            id_to_subcat.update(self._id_to_subcat)
+            all_products.extend(self._products)
 
-    process = CrawlerProcess()
-    process.crawl(CollectorSpider)
-    process.start()
+    p = CrawlerProcess()
+    p.crawl(CollectorSpider)
+    p.start()
 
-    print(f"{len(id_to_subcat)} IDs collectés")
-
-    if not id_to_subcat:
-        print("❌ PROBLEME: aucun ID → site probablement bloqué")
+    if not all_products:
+        print("❌ Aucun produit collecté")
         return
 
-    products = fetch_all_products(id_to_subcat)
+    # Enrichissement optionnel avec prix live
+    print("Enrichissement via API volatile...")
+    all_products = enrich_with_volatile(all_products)
 
-    with open(output_abs, "w", encoding="utf-8") as f:
-        json.dump(products, f, ensure_ascii=False, indent=4)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(all_products, f, ensure_ascii=False, indent=4)
 
-    print(f"Scraping terminé → {output_abs}")
+    print(f"✅ Terminé → {output_file} ({len(all_products)} produits)")
 
 
 if __name__ == "__main__":
