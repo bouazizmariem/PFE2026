@@ -2,6 +2,8 @@ import json
 import re
 from datetime import datetime
 from normalize_specs import normalize_specs
+from normalize_brand import normalize_brand
+from normalize_subcategory import normalize_subcategory
 
 
 # -----------------------------
@@ -92,15 +94,6 @@ def clean_prices(price_final, price_original):
 
 
 # -----------------------------
-# Nettoyer marque
-# -----------------------------
-def clean_brand(brand):
-    if not brand or brand.strip() == "" or brand.lower() == "sans marque":
-        return "Unknown"
-    return brand.strip()
-
-
-# -----------------------------
 # Transformer produit
 # -----------------------------
 def transform_product(product, site_name):
@@ -109,9 +102,9 @@ def transform_product(product, site_name):
     cleaned["id"]          = str(product.get("id"))
     cleaned["name"]        = product.get("name")
     cleaned["reference"]   = product.get("reference")
-    cleaned["brand"]       = clean_brand(product.get("brand"))
+    cleaned["brand"]       = normalize_brand(product.get("brand"), product.get("name", ""))
     cleaned["category"]    = product.get("category")
-    cleaned["subcategory"] = product.get("subcategory")
+    cleaned["subcategory"] = normalize_subcategory(product.get("subcategory"))  # ← CORRIGÉ
     cleaned["site"]        = site_name
 
     # Date

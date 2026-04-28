@@ -2,6 +2,8 @@ import json
 import re
 from datetime import datetime
 from normalize_specs import normalize_specs
+from normalize_brand import normalize_brand
+from normalize_subcategory import normalize_subcategory
 
 
 # -----------------------------
@@ -93,15 +95,6 @@ def clean_prices(price_final, price_original):
 
 
 # -----------------------------
-# Nettoyer marque
-# -----------------------------
-def clean_brand(brand):
-    if not brand or brand.strip() == "" or brand.lower() == "sans marque":
-        return "Unknown"
-    return brand.strip()
-
-
-# -----------------------------
 # Nettoyer disponibilité Mytek
 # -----------------------------
 def clean_availability(stock):
@@ -172,12 +165,11 @@ def transform_product(product):
     cleaned["reference"] = product.get("sku")
 
     manufacturer     = product.get("manufacturer")
-    cleaned["brand"] = clean_brand(
-        manufacturer.get("label") if manufacturer else None
-    )
+    raw_brand        = manufacturer.get("label") if manufacturer else None
+    cleaned["brand"] = normalize_brand(raw_brand, product.get("name", ""))  # ← CORRIGÉ
 
     cleaned["category"]    = product.get("category")
-    cleaned["subcategory"] = product.get("subcategory")
+    cleaned["subcategory"] = normalize_subcategory(product.get("subcategory"))  # ← CORRIGÉ
     cleaned["site"]        = "mytek"
 
     # Date
