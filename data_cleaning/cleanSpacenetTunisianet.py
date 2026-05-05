@@ -82,17 +82,21 @@ def clean_prices(price_final, price_original):
     pf = clean_price(price_final)
     po = clean_price(price_original)
 
-    # price_original invalide si <= price_final
-    if po is not None and pf is not None and po <= pf:
-        po = None
+    # ❌ Si prix final invalide → produit ignoré
+    if pf is None or pf < 10:
+        return None, None
 
-    # prix aberrant
-    if pf is not None and pf < 10:
-        pf = None
+    # 🟢 CAS 1 : pas de prix original → pas de promo
+    if po is None:
+        po = pf
+
+    # 🟡 CAS 2 : incohérence
+    elif po < pf:
+        po = pf
+
+    # 🟢 CAS 3 : promo valide → on garde
 
     return pf, po
-
-
 # -----------------------------
 # Transformer produit
 # -----------------------------
